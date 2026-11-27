@@ -1,0 +1,21 @@
+node_modules/
+dist/
+.toolchain/
+src-tauri/target/
+src-tauri/gen/schemas/
+*.tsbuildinfo
+playwright-report/
+.qa/
+
+# Local development settings, account data and credentials
+.env
+.env.*
+!.env.example
+*.vault
+trusted-device.dat
+codex-path.txt
+auth.json
+priceai-snapshots.json
+instance.lock
+/codex/
+rollout-*.jsonl
