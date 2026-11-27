@@ -178,7 +178,7 @@ fn timestamp(value: &Value) -> Option<i64> {
     (time > 0).then_some(time)
 }
 
-fn valid_id(value: &Value) -> Option<&str> {
+pub fn valid_id(value: &Value) -> Option<&str> {
     value.as_str().filter(|s| {
         !s.is_empty()
             && s.len() <= 160
@@ -189,10 +189,12 @@ fn valid_id(value: &Value) -> Option<&str> {
 
 fn read_rollout(
     path: &Path,
-    account: Option<Uuid>,
+    folder_account: Option<Uuid>,
+    identities: &Identities,
     requests: &mut HashMap<String, Request>,
 ) -> io::Result<()> {
     let mut reader = BufReader::new(File::open(path)?);
+    let mut account = folder_account;
     let mut line = Vec::new();
     let mut model = String::new();
     let mut thread = path
@@ -226,6 +228,11 @@ fn read_rollout(
         let kind = event["type"].as_str();
         match kind {
             Some("session_meta") => {
+                if data["account_scoped"].as_bool() == Some(true) {
+                    if let Some(user_id) = valid_id(&data["creator_user_id"]) {
+                        account = identities.get(user_id).copied().flatten();
+                    }
+                }
                 if let Some(id) = valid_id(&data["id"]) {
                     thread = id.to_owned();
                 }
@@ -330,6 +337,8 @@ fn insert_request(requests: &mut HashMap<String, Request>, key: String, request:
         .or_insert(request);
 }
 
+pub type Identities = BTreeMap<String, Option<Uuid>>;
+
 pub struct Index {
     requests: Vec<Request>,
     files: u64,
@@ -338,19 +347,19 @@ pub struct Index {
 }
 
 impl Index {
-    pub fn scan(sources: &[Source]) -> Self {
+    pub fn scan(sources: &[Source], managed: &[Source], identities: &Identities) -> Self {
         let mut requests = HashMap::new();
         let mut files = 0;
         let mut inaccessible = 0;
         let mut scanned = HashSet::new();
-        for source in sources {
+        for source in sources.iter().chain(managed) {
             let Ok(root) = fs::canonicalize(&source.folder) else {
                 inaccessible += 1;
                 continue;
             };
             let mut directories = vec![root.clone()];
             while let Some(directory) = directories.pop() {
-                if !scanned.insert((source.id, directory.clone())) {
+                if !scanned.insert(directory.clone()) {
                     continue;
                 }
                 let Ok(entries) = fs::read_dir(&directory) else {
@@ -377,7 +386,12 @@ impl Index {
                             name.starts_with("rollout-") && name.ends_with(".jsonl")
                         })
                     {
-                        if read_rollout(&entry.path(), source.account_id, &mut requests).is_ok() {
+                        let path = entry.path();
+                        let account = managed
+                            .iter()
+                            .find(|owner| path.starts_with(&owner.folder))
+                            .map_or(source.account_id, |owner| owner.account_id);
+                        if read_rollout(&path, account, identities, &mut requests).is_ok() {
                             files += 1;
                         } else {
                             inaccessible += 1;

@@ -59,6 +59,8 @@ pub struct Observation {
     pub last_success_at: Option<u64>,
     pub online_verified_at: Option<u64>,
     pub email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
     pub plan: Option<String>,
     pub detail: Option<String>,
     #[serde(default)]
@@ -144,6 +146,7 @@ pub struct AccountView<'a> {
     pub has_totp: bool,
     pub observed: Option<&'a Observation>,
     pub linked_email: Option<&'a str>,
+    pub link_profile: Option<Uuid>,
 }
 
 impl Account {
@@ -154,6 +157,7 @@ impl Account {
             has_totp: !self.totp.is_empty(),
             observed: self.link.as_ref().map(|link| &link.observation),
             linked_email: self.link.as_ref().map(|link| link.email.as_str()),
+            link_profile: self.link.as_ref().map(|link| link.profile),
         }
     }
 }

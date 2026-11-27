@@ -18,7 +18,7 @@ async function fixture() {
     {email: 'lumen@example.com', manualPlan:'plus', manualStatus:'available', plan:'plus',
       short:100, week:23, cards:0, reached:'rate_limit_reached'},
     {email: 'poppy@example.com', manualPlan:'unknown', manualStatus:'unchecked', plan:'go',
-      short:12, cards:null},
+      short:90, week:96, cards:null},
     {email: 'mira@example.com', manualPlan:'free', manualStatus:'available', plan:'free',
       short:0, cards:0, network:'401 Unauthorized'},
     {email: 'haven@example.com', manualPlan:'free', manualStatus:'available'},
@@ -44,7 +44,7 @@ require('node:readline').createInterface({input: process.stdin}).on('line', line
   const {id, method} = JSON.parse(line);
   if (!id) return;
   let result = {};
-  if (method === 'account/read') result = {account: {type:'chatgpt',email:scenario.email,planType:scenario.manualPlan}};
+  if (method === 'account/read') result = {account: {type:'chatgpt',email:scenario.email,planType:scenario.manualPlan},userId:'user_fixture_'+scenario.index};
   if (method === 'account/usage/read') {
     if (scenario.index === 3 || fs.existsSync('simulate-offline')) {
       console.log(JSON.stringify({id,error:{code:-32000,message:'Response unavailable'}}));
@@ -71,8 +71,10 @@ require('node:readline').createInterface({input: process.stdin}).on('line', line
   console.log(JSON.stringify({id,result}));
 });
 `);
-      link = {profile,email:settings.email,online:false,observation:{state:'connected',checkedAt:now,
-        lastSuccessAt:now,onlineVerifiedAt:null,email:settings.email,plan:'unknown',detail:null}};
+      const old = now - 360;
+      link = {profile,email:settings.email,online:false,observation:{state:'connected',checkedAt:old,
+        lastSuccessAt:old,onlineVerifiedAt:old,email:settings.email,plan:'unknown',detail:null,
+        quota:{status:'unknown',windows:[],resetCards:null,nextCardExpiry:null}}};
     }
     accounts.push({id:randomUUID(),number:'GPT-'+String(index+1).padStart(3,'0'),email:settings.email,
       previousEmail:'',plan:settings.manualPlan,availability:settings.manualStatus,rebind:['unknown','pending','changed','unchanged','unknown'][index],
@@ -92,6 +94,15 @@ require('node:readline').createInterface({input: process.stdin}).on('line', line
   const a = record('resp_demoA',1000,200,100,0);
   const b = record('resp_demoB',2000,800,220,-2);
   const c = record('resp_demoC',80,0,20,-15,'example-unpriced-model');
+  if (mode === 'fixture') {
+    const managed = join(data,'codex',accounts[2].link.profile,'archived_sessions');
+    await mkdir(managed,{recursive:true});
+    await writeFile(join(managed,'rollout-managed.jsonl'),JSON.stringify(record('resp_managed',30,0,15,-60))+'\n');
+  }
+  const owned = event('session_meta',{id:'shared_scoped_fixture',account_scoped:true,creator_user_id:'user_fixture_2'},-61);
+  if (mode === 'fixture') {
+    await writeFile(join(mixed,'rollout-scoped.jsonl'),[owned,record('resp_scoped',20,0,15,-61)].map(entry => JSON.stringify(entry)).join('\n')+'\n');
+  }
   const rows = [event('turn_context',{model:'gpt-5.6-sol'},0),a,
     counter(usage(1000,200,100),usage(1000,200,100),0),b,
     counter(usage(2000,800,220),usage(3000,1000,320),-2),
@@ -144,7 +155,7 @@ const screenshot = name => page.screenshot({path:join(output,name),fullPage:true
 await heading('解锁账号库').waitFor();
 await page.getByLabel('主密码',{exact:true}).fill(master);
 await button('解锁').click();
-await heading('账号台账').waitFor();
+await heading('账号枢纽').waitFor();
 if (mode === 'live') {
   await button('价格监控').click();
   await page.getByText(/商品快照/).waitFor({timeout:35000});
@@ -170,6 +181,12 @@ if (mode === 'empty') {
 }
 
 await page.getByText('Codex 可用',{exact:true}).first().waitFor();
+const warning = page.locator('tbody tr').filter({hasText:'poppy@example.com'}).getByText('额度不足',{exact:true});
+await warning.waitFor();
+assert(await warning.evaluate(el => el.classList.contains('tone-warm')));
+await page.getByRole('navigation').getByRole('button',{name:/^待复核/}).click();
+assert.equal(await button('新增账号').count(),0);
+await button('账号枢纽').click();
 await button('查看 GPT-001 详情').click();
 await reset.getByText('2',{exact:false}).first().waitFor();
 assert.equal(await reset.locator('.reset-card-count').textContent(),'2张');
@@ -215,7 +232,7 @@ await screenshot('settings-narrow.png');
 
 await page.setViewportSize({width:1270,height:870});
 await button('用量统计').click();
-await page.getByText(/已扫描 2 个会话日志/).waitFor();
+await page.getByText(/已扫描 4 个会话日志/).waitFor();
 assert.equal(await button('账号用量').count(),0);
 assert.equal(await button('本地请求').count(),0);
 assert.equal(await card('Token 消耗').textContent(),'3,320');
@@ -234,30 +251,31 @@ assert.equal(await page.locator('.usage-dot').count(),7);
 await page.getByRole('button',{name:/缓存命中率.*缓存读取/}).click();
 await heading('缓存命中率点阵图').waitFor();
 await button('今日').click();
-await page.getByText(/已扫描 2 个会话日志/).waitFor();
+await page.getByText(/已扫描 4 个会话日志/).waitFor();
 assert.equal(await card('请求数').textContent(),'1');
 assert.equal(await page.locator('.usage-dot').count(),24);
 await button('近 30 天').click();
-await page.getByText(/已扫描 2 个会话日志/).waitFor();
+await page.getByText(/已扫描 4 个会话日志/).waitFor();
 assert.equal(await card('Token 消耗').textContent(),'3,420');
 await button('按账号').click();
 assert.equal(await page.getByRole('table',{name:'按账号'}).locator('tbody tr').count(),2);
 await button('按模型').click();
 assert.equal(await page.getByRole('table',{name:'按模型'}).locator('tbody tr').count(),2);
 await button('example-unpriced-model').click();
-await page.getByText(/已扫描 2 个会话日志/).waitFor();
+await page.getByText(/已扫描 4 个会话日志/).waitFor();
 assert.equal(await card('成本估算').textContent(),'—');
 assert.equal(await page.getByLabel('筛选模型').locator('option').count(),3);
 await page.getByLabel('筛选模型').selectOption('');
-await page.getByText(/已扫描 2 个会话日志/).waitFor();
+await page.getByText(/已扫描 4 个会话日志/).waitFor();
 await button('请求日志').click();
 assert.equal(await logs.count(),3);
 await button('日志设置').first().click();
 const sources = page.getByRole('dialog',{name:'日志设置'});
-assert.equal(await sources.locator('.usage-source').count(),2);
+assert.equal(await sources.locator('.usage-source').count(),3);
+await sources.getByText(/poppy@example.com · 自动识别/).waitFor();
 const mixed = sources.getByLabel(/目录归属.*fixture-sessions-mixed/);
 await mixed.selectOption({label:'GPT-001 · atlas@example.com'});
-await page.getByText(/已扫描 2 个会话日志/).waitFor();
+await page.getByText(/已扫描 4 个会话日志/).waitFor();
 await page.waitForFunction(() => document.querySelector('table[aria-label="请求日志"] tbody')?.textContent.includes('未归属') === false);
 assert.equal(await logs.filter({hasText:'未归属'}).count(),0);
 await button('完成').click();
@@ -266,20 +284,29 @@ const newRows = Array.from({length:52},(_,index)=>({timestamp:new Date().toISOSt
   payload:{response_id:'test_batch_'+index,model:'gpt-5.6-sol',usage:{input_tokens:10,cached_input_tokens:0,output_tokens:5}}}));
 await writeFile(join(folder,'rollout-more.jsonl'),newRows.map(x=>JSON.stringify(x)).join('\n')+'\n');
 await button('刷新用量').click();
-await page.getByText(/已扫描 3 个会话日志/).waitFor();
+await page.getByText(/已扫描 5 个会话日志/).waitFor();
 assert.equal(await card('请求数').textContent(),'55');
 assert.equal(await logs.count(),50);
 await button('下一页').click();
 await page.getByText('第 2 / 2 页',{exact:true}).waitFor();
 assert.equal(await logs.count(),5);
+await button('全部').click();
+await page.getByLabel('筛选账号').selectOption({label:'GPT-003 · poppy@example.com'});
+await logs.filter({hasText:'poppy@example.com'}).first().waitFor();
+assert.equal(await card('Token 消耗').textContent(),'80');
+assert.equal(await logs.count(),2);
 await button('价格监控').click();
 const priceCard = title => page.getByRole('region',{name:'价格概览'}).locator('.stat-card').filter({hasText:title}).locator('strong');
 await page.getByText(/已记录 2 个快照/).waitFor();
 assert.match(await priceCard('区间峰价').textContent(), /10/);
 assert.match(await priceCard('区间谷价').textContent(), /8/);
+const interval = priceCard('区间峰价').locator('..').locator('small');
+assert.match(await interval.textContent(), /\d{2}\/\d{2} .* – \d{2}\/\d{2}/);
+const dailyInterval = await interval.textContent();
 await button('近 7 天').click();
 await page.getByText(/已记录 3 个快照/).waitFor();
 assert.match(await priceCard('区间峰价').textContent(), /17/);
+assert.notEqual(await interval.textContent(),dailyInterval);
 await page.getByLabel('最高价').fill('11');
 assert.equal(await page.getByRole('table',{name:'可见报价与库存'}).locator('tbody tr').count(),2);
 await page.getByText('2 条有货 · 已知库存 12 · 1 条有货报价未提供数量',{exact:true}).waitFor();

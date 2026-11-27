@@ -37,6 +37,7 @@ export interface Observation {
   lastSuccessAt: number | null;
   onlineVerifiedAt: number | null;
   email: string | null;
+  userId?: string;
   plan: string | null;
   detail: string | null;
   quota: Quota | null;
@@ -67,9 +68,10 @@ export interface Account {
   hasTotp: boolean;
   observed: Observation | null;
   linkedEmail: string | null;
+  linkProfile: string | null;
 }
 
-export type AccountInput = Omit<Account, 'id' | 'updatedAt' | 'hasPassword' | 'hasTotp' | 'observed' | 'linkedEmail'> & {
+export type AccountInput = Omit<Account, 'id' | 'updatedAt' | 'hasPassword' | 'hasTotp' | 'observed' | 'linkedEmail' | 'linkProfile'> & {
   id: string | null;
   password?: string;
   totp?: string;
@@ -90,6 +92,7 @@ export interface Unlocked {
   manualOrder: boolean;
   hasCustomOrder: boolean;
   usageSources: UsageSource[];
+  usageManaged: UsageSource[];
 }
 export type Snapshot = Unlocked | { phase: 'new' | 'locked'; deviceTrusted: boolean };
 export type Saved = { id: string; snapshot: Unlocked };
@@ -187,7 +190,15 @@ export function effectiveStatus(account: Account, time: number): AccountStatus {
   const quota = observation.quota;
   if (!quota || quotaStale(observation, time)) return {label: '额度待刷新', availability: 'unchecked', tone: 'warm'};
   switch (quota.status) {
-    case 'available': return {label: 'Codex 可用', availability: 'available', tone: 'good'};
+    case 'available': {
+      const low = quota.windows.some(window => {
+        const remaining = 100 - window.usedPercent;
+        return (window.durationMinutes === 300 && remaining < 10) ||
+          (window.durationMinutes === 10080 && remaining < 5);
+      });
+      return low ? {label: '额度不足', availability: 'available', tone: 'warm'} :
+        {label: 'Codex 可用', availability: 'available', tone: 'good'};
+    }
     case 'limitReached': return {label: '额度用尽', availability: 'unavailable', tone: 'bad'};
     case 'workspaceLimited': return {label: '工作区受限', availability: 'unavailable', tone: 'bad'};
     default: return {label: '待确认', availability: 'unchecked', tone: 'warm'};

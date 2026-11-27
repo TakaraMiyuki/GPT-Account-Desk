@@ -32,6 +32,7 @@ pub type RpcResult<T> = Result<T, Failure>;
 
 pub struct Identity {
     pub email: String,
+    pub user_id: Option<String>,
     pub plan: Option<String>,
 }
 
@@ -144,6 +145,7 @@ impl Connection {
             .ok_or(Failure::Unsupported)?;
         Ok(Identity {
             email: email.into(),
+            user_id: crate::usage::valid_id(&result["userId"]).map(str::to_owned),
             plan: quota::reported_plan(&account["planType"]),
         })
     }
@@ -319,6 +321,7 @@ async fn observe_authorized(
         last_success_at: None,
         online_verified_at: None,
         email: Some(identity.email),
+        user_id: identity.user_id,
         plan: identity.plan.clone(),
         detail: None,
         quota: None,
@@ -366,7 +369,7 @@ pub async fn check(
     let mut outcome = previous.clone();
     outcome.checked_at = now();
     outcome.detail = None;
-    let result = async {
+    let result = timeout(Duration::from_secs(15), async {
         let mut server = Connection::start(executable, home).await?;
         let identity = server.identity().await?;
         let matches = identity.email.eq_ignore_ascii_case(linked_email)
@@ -375,9 +378,13 @@ pub async fn check(
         if !matches {
             outcome.state = ConnectionState::IdentityMismatch;
             outcome.detail = Some("当前授权邮箱与台账或绑定邮箱不同，请确认后重新连接。".into());
+            outcome.user_id = None;
             outcome.plan = None;
             outcome.quota = None;
             return Ok(());
+        }
+        if identity.user_id.is_some() {
+            outcome.user_id = identity.user_id;
         }
         if outcome
             .plan
@@ -387,8 +394,9 @@ pub async fn check(
             outcome.plan = identity.plan.clone();
         }
         refresh_quota(&mut server, &mut outcome, identity.plan).await
-    }
-    .await;
+    })
+    .await
+    .unwrap_or(Err(Failure::Network));
     if let Err(error) = result {
         record_failure(&mut outcome, error);
     }
@@ -505,6 +513,7 @@ mod tests {
             std::fs::write(home.join("app-server"), mock).unwrap();
         }
         let prior = Observation {
+            user_id: None,
             state: ConnectionState::Connected,
             checked_at: 500,
             last_success_at: Some(500),

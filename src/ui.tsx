@@ -196,10 +196,10 @@ export function Editor({account, suggested, onSave, onClose, busy}: {
   </Modal>;
 }
 
-export function Detail({account, close, edit, mark, remove, copy, reveal, code, connect, disconnect, refresh, jumpSettings, busy, codexReady, quotaNow, privateWindow, setPrivateWindow, loginStage, cancelLogin, copyLoginLink}:
+export function Detail({account, close, edit, mark, remove, copy, reveal, code, connect, disconnect, refresh, jumpSettings, busy, refreshing, codexReady, quotaNow, privateWindow, setPrivateWindow, loginStage, cancelLogin, copyLoginLink}:
   {account: Account; close: () => void; edit: () => void; mark: (status: Account['availability']) => void;
     remove: () => void; copy: (kind: string) => void; reveal: () => Promise<string>; code: () => Promise<Code>;
-    connect: () => void; disconnect: () => void; refresh: () => void; jumpSettings: () => void; busy: string; codexReady: boolean; quotaNow: number;
+    connect: () => void; disconnect: () => void; refresh: () => void; jumpSettings: () => void; busy: string; refreshing: boolean; codexReady: boolean; quotaNow: number;
     privateWindow: boolean; setPrivateWindow: (value: boolean) => void; loginStage: LoginStage | null;
     cancelLogin: () => void; copyLoginLink: () => void;}) {
   const [password, setPassword] = useState('');
@@ -286,7 +286,7 @@ export function Detail({account, close, edit, mark, remove, copy, reveal, code, 
             </> : <Button disabled={busyAny} onClick={codexReady ? connect : jumpSettings}>
               <Link2 size={15}/>{!codexReady ? '设置 Codex CLI' : observation ? '重新连接' : '连接 Codex'}
             </Button>}
-            {observation && !signingIn && <Button disabled={busyAny} onClick={refresh}><RefreshCw size={15}/>{busy === 'refresh' ? '检查中…' : '刷新'}</Button>}
+            {observation && !signingIn && <Button disabled={busyAny || refreshing} onClick={refresh}><RefreshCw size={15}/>{refreshing ? '检查中…' : '刷新'}</Button>}
             {observation && !signingIn && <Button disabled={busyAny} kind="ghost" className="icon-button" aria-label="断开 Codex" title="断开 Codex" onClick={disconnect}><Unlink size={16}/></Button>}
 
           </div>
@@ -332,7 +332,7 @@ export function SettingsView({book, onSave, choose, discover, trust, exportBacku
     <section className="settings-card settings-lock"><div className="settings-heading"><div className="section-icon"><LockKeyhole size={19}/></div><div><h3>锁定与复核</h3><p>设置锁定时间、人工复核周期和应用内刷新频率。</p></div></div>
       {select('闲置后自动锁定', 'lockMinutes', [[1, '1 分钟'], [5, '5 分钟'], [15, '15 分钟'], [30, '30 分钟'], [0, '永不']])}
       {select('人工状态复核周期', 'reviewDays', [[7, '7 天'], [14, '14 天'], [30, '30 天'], [60, '60 天'], [90, '90 天']])}
-      {select('Codex 自动刷新', 'autoRefreshMinutes', [[0, '仅解锁时刷新'], [15, '每 15 分钟'], [30, '每 30 分钟'], [60, '每 60 分钟']])}
+      {select('Codex 自动刷新', 'autoRefreshMinutes', [[0, '智能（每 5 分钟）'], [15, '每 15 分钟'], [30, '每 30 分钟'], [60, '每 60 分钟']])}
       <div className="settings-row"><span className="path-info"><strong>信任此设备，记住主密码</strong>
         <small>同一 Windows 用户重新打开应用时自动解锁。</small></span>
         <Button disabled={!!busy} onClick={() => trust(!book.deviceTrusted)}>{book.deviceTrusted ? '撤销信任' : '信任此设备'}</Button></div>

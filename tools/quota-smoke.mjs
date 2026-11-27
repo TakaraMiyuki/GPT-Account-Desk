@@ -92,7 +92,7 @@ async function unlock() {
   await heading('解锁账号库').waitFor();
   await page.getByLabel('主密码',{exact:true}).fill(master);
   await button('解锁').click();
-  await heading('账号台账').waitFor();
+  await page.getByRole('heading',{name:/^账号(?:台账|枢纽)$/}).waitFor();
 }
 
 await unlock();
@@ -149,7 +149,7 @@ if (mode === 'legacy') {
   await page.getByLabel('闲置后自动锁定').selectOption('0');
   await button('保存设置').click();
   await page.getByText('设置已保存。',{exact:true}).waitFor();
-  await page.getByRole('navigation').getByRole('button',{name:'账号台账'}).click();
+  await page.getByRole('navigation').getByRole('button',{name:/^账号(?:台账|枢纽)$/}).click();
   const { readFile } = await import('node:fs/promises');
   const profile = await readFile(join(data,'atlas-fixture-profile.txt'),'utf8');
   await writeFile(join(data,'codex',profile,'simulate-offline'),'');

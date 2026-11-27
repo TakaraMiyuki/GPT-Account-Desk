@@ -80,10 +80,11 @@ export function PriceView() {
   const inStock = visible.filter(offer => offer.available);
   const known = inStock.filter(offer => offer.stock !== null);
   const stockTotal = known.length ? known.reduce((total, offer) => total + (offer.stock ?? 0), 0) : null;
+  const rangeLabel = time(from) + ' – ' + time(now);
   const cards = [
     {label: '最新最低价', value: price(current?.lowest), Icon: Coins},
-    {label: '区间谷价', value: price(low), Icon: ArrowDown},
-    {label: '区间峰价', value: price(high), Icon: ArrowUp},
+    {label: '区间谷价', value: price(low), range: rangeLabel, Icon: ArrowDown},
+    {label: '区间峰价', value: price(high), range: rangeLabel, Icon: ArrowUp},
     {label: '全部有货报价', value: number(current?.inStockCount), Icon: Package},
   ];
 
@@ -105,8 +106,8 @@ export function PriceView() {
     </section>
 
     <section className="stats-grid" aria-label="价格概览">
-      {cards.map(({label, value, Icon}) => <div key={label} className="stat-card usage-stat">
-        <div className="stat-icon stat-green"><Icon size={18}/></div><div className="stat-copy"><span>{label}</span><strong>{value}</strong></div>
+      {cards.map(({label, value, range, Icon}) => <div key={label} className="stat-card usage-stat">
+        <div className="stat-icon stat-green"><Icon size={18}/></div><div className="stat-copy"><span>{label}</span><strong>{value}</strong>{range && <small>{range}</small>}</div>
       </div>)}
     </section>
 

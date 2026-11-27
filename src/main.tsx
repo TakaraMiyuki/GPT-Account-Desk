@@ -23,7 +23,7 @@ type Page = 'accounts' | 'review' | 'usage' | 'prices' | 'settings';
 type Notice = {text: string; error?: boolean};
 type PendingLogin = {attempt: string; account: string; stage: LoginStage | null};
 const strings: Record<Page, {title: string; subtitle: string}> = {
-  accounts: {title: '账号台账', subtitle: '集中整理 ChatGPT 账号、登录凭据与核验记录。'},
+  accounts: {title: '账号枢纽', subtitle: '集中整理 ChatGPT 账号、登录凭据与核验记录。'},
   review: {title: '待复核', subtitle: '查看需要确认状态、续费或改绑的账号。'},
   usage: {title: '用量统计', subtitle: '按时间、账号和模型查看 Codex 用量。'},
   prices: {title: '价格监控', subtitle: '追踪 PriceAI 的 ChatGPT Plus 报价和库存。'},
@@ -49,6 +49,8 @@ function App() {
   const [confirmation, setConfirmation] = useState<'remove' | 'disconnect' | 'restore' | null>(null);
   const [backupPassword, setBackupPassword] = useState('');
   const [busy, setBusy] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshingRef = useRef(false);
   const [privateWindow, setPrivateWindow] = useState(true);
   const [login, setLogin] = useState<PendingLogin | null>(null);
   const busyRef = useRef('');
@@ -187,43 +189,66 @@ function App() {
     const timer = setInterval(() => setQuotaNow(seconds()), 30_000);
     return () => clearInterval(timer);
   }, [!!totalLinked]);
-  const enabledRefresh = current?.settings.autoRefreshMinutes ?? 0;
+  const refreshMinutes = current?.settings.autoRefreshMinutes || 5;
   const installReady = Boolean(current?.codexPath);
   const tags = Array.from(new Set(accounts.flatMap(row => row.tags))).sort((a, b) => a.localeCompare(b, 'zh-CN'));
 
-  function refresh(ids?: string[], automatic = false) {
+  async function refresh(ids?: string[], automatic = false) {
     if (!installReady) {
       if (!automatic) setNotice({text: '请先在设置与备份中选择 Codex CLI。', error: true});
       return;
     }
-    void run('refresh', () => invoke<Snapshot>('refresh_accounts', {ids: ids ?? null, automatic}), result => {
-      applySnapshot(result);
+    if (refreshingRef.current || busyRef.current) return;
+    refreshingRef.current = true;
+    setRefreshing(true);
+    const started = epoch.current;
+    try {
+      const result = await invoke<Snapshot>('refresh_accounts', {ids: ids ?? null, automatic});
+      if (started !== epoch.current || result.phase !== 'unlocked') return;
+      const observations = new Map(result.accounts.map(row => [row.id, row]));
+      setBook(latest => latest?.phase !== 'unlocked' ? latest : {...latest, accounts: latest.accounts.map(row => {
+        const updated = observations.get(row.id);
+        return updated?.linkProfile && row.linkProfile === updated.linkProfile && updated.observed &&
+          row.observed && updated.observed.checkedAt >= row.observed.checkedAt
+          ? {...row, observed: updated.observed} : row;
+      })});
       setQuotaNow(seconds());
       if (!automatic) setNotice({text: 'Codex 刷新完成，可在详情查看结果。'});
-    }, automatic);
+    } catch (reason) {
+      if (!automatic && started === epoch.current) setNotice({text: errText(reason), error: true});
+    } finally {
+      refreshingRef.current = false;
+      setRefreshing(false);
+    }
   }
 
-  const refreshLatest = useRef(refresh);
-  refreshLatest.current = refresh;
+  const refreshDue = useRef(() => {});
+  refreshDue.current = () => {
+    const now = seconds();
+    const due = accounts.filter(row => {
+      const observation = row.observed;
+      if (!observation || observation.state === 'reauth' || observation.state === 'identityMismatch') return false;
+      const age = now - observation.checkedAt;
+      return age >= refreshMinutes * 60 ||
+        (!observation.quota && observation.state === 'connected') ||
+        (age >= 60 && !!observation.quota?.windows.some(window => window.resetsAt &&
+          window.resetsAt > (observation.onlineVerifiedAt ?? 0) && window.resetsAt <= now));
+    }).map(row => row.id);
+    if (due.length) void refresh(due, true);
+  };
 
   useEffect(() => {
     if (!current || !totalLinked || !installReady) return;
-    let timer = 0;
-    function refreshWhenReady() {
-      if (busyRef.current) { timer = window.setTimeout(refreshWhenReady, 350); return; }
-      refreshLatest.current(undefined, true);
-    }
-    timer = window.setTimeout(refreshWhenReady, 300);
-    return () => window.clearTimeout(timer);
+    const check = () => refreshDue.current();
+    const initial = window.setTimeout(check, 350);
+    const timer = window.setInterval(check, 15_000);
+    window.addEventListener('focus', check);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(timer);
+      window.removeEventListener('focus', check);
+    };
   }, [!!current, !!totalLinked, installReady]);
-
-  useEffect(() => {
-    if (!current || !enabledRefresh || !totalLinked || !installReady) return;
-    const timer = setInterval(() => {
-      if (!document.hidden) refreshLatest.current(undefined, true);
-    }, enabledRefresh * 60_000);
-    return () => clearInterval(timer);
-  }, [!!current, enabledRefresh, !!totalLinked, installReady]);
 
   const displayRows = useMemo(() => {
     if (!current || page === 'settings' || page === 'usage' || page === 'prices') return [];
@@ -439,7 +464,7 @@ function App() {
       <div className="rail-top"><Brand/></div>
       <nav aria-label="主要导航" className="nav-list">
         <button type="button" className={page === 'accounts' ? 'nav-active' : ''} aria-current={page === 'accounts' ? 'page' : undefined}
-          onClick={() => go('accounts')}><BookOpen size={18}/> 账号台账</button>
+          onClick={() => go('accounts')}><BookOpen size={18}/> 账号枢纽</button>
         <button type="button" className={page === 'review' ? 'nav-active' : ''} aria-current={page === 'review' ? 'page' : undefined}
           onClick={() => go('review')}><ClipboardCheck size={18}/> 待复核 {attention.length > 0 && <span className="nav-count">{attention.length}</span>}</button>
         <button type="button" className={page === 'usage' ? 'nav-active' : ''} aria-current={page === 'usage' ? 'page' : undefined}
@@ -462,7 +487,7 @@ function App() {
       <main className="main-content">
         <section className={`hero hero-${page}`}>
           <div className="hero-copy"><h1>{strings[page].title}</h1><p>{strings[page].subtitle}</p>
-            {(page === 'accounts' || page === 'review') && <div className="hero-actions">
+            {page === 'accounts' && <div className="hero-actions">
               <Button kind="primary" className="hero-button" onClick={() => setEditing('new')}><Plus size={18}/> 新增账号</Button>
               {page === 'accounts' && <Button className="hero-import" onClick={() => setImportOpen(true)}><ClipboardPaste size={17}/> 快速导入</Button>}
             </div>}</div>
@@ -499,8 +524,8 @@ function App() {
           restore={() => setConfirmation('restore')}/> : <section className="table-card" aria-label={page === 'review' ? '待复核列表' : '账号列表'}>
           <header className="table-heading"><div><h2>{page === 'review' ? '待处理账号' : '账号列表'} <span>{displayRows.length}</span></h2>
             <p>{page === 'review' ? '包含到期未核验和 7 天内续费（含已过期）的记录。' : hasFilters ? '清除筛选后可拖动排序。' : '长按账号行可上下拖动排序。'}</p></div>
-            <Button onClick={() => refresh()} disabled={!totalLinked || !!busy}><RefreshCw size={16} className={busy === 'refresh' ? 'spin' : ''}/>
-              {busy === 'refresh' ? '检查中…' : '刷新 Codex'}</Button></header>
+            <Button onClick={() => refresh()} disabled={!totalLinked || !!busy || refreshing}><RefreshCw size={16} className={refreshing ? 'spin' : ''}/>
+              {refreshing ? '检查中…' : '刷新 Codex'}</Button></header>
           <div className="toolbar">
             <div className="search-box"><Search size={17}/><input ref={search} aria-label="搜索账号" placeholder="搜索邮箱、编号或标签" value={query}
               onChange={event => setQuery(event.target.value)}/>{query ? <button type="button" aria-label="清空搜索" onClick={() => setQuery('')}><X size={15}/></button>
@@ -567,7 +592,7 @@ function App() {
       code={() => readCode(active.id)} connect={() => connect(active)} disconnect={() => setConfirmation('disconnect')}
       privateWindow={privateWindow} setPrivateWindow={setPrivateWindow}
       loginStage={login?.account === active.id ? login.stage : null} cancelLogin={() => void cancelLogin()} copyLoginLink={() => void copyLoginLink()}
-      refresh={() => refresh([active.id])} jumpSettings={() => go('settings')} busy={busy} codexReady={installReady} quotaNow={quotaNow}/>}
+      refresh={() => refresh([active.id])} jumpSettings={() => go('settings')} busy={busy} refreshing={refreshing} codexReady={installReady} quotaNow={quotaNow}/>}
     {importOpen && <QuickImport busy={!!busy} close={() => setImportOpen(false)}
       inspect={input => quickImport(input, false)} commit={input => quickImport(input, true)}/>}
     {editing !== null && <Editor key={editing} account={editingAccount} suggested={suggested} onSave={save} onClose={() => setEditing(null)} busy={!!busy}/>}

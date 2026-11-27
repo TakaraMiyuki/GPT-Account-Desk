@@ -136,7 +136,7 @@ impl AppState {
             Some(vault) => json!({
                 "phase": "unlocked", "accounts": vault.book.accounts.iter().map(Account::view).collect::<Vec<_>>(),
                 "settings": vault.book.settings, "codexPath": executable,
-                "usageSources": vault.book.usage_sources, "deviceTrusted": self.device_token.is_file(), "manualOrder": vault.book.manual_order, "hasCustomOrder": vault.book.has_custom_order
+                "usageSources": vault.book.usage_sources, "usageManaged": usage_commands::managed_sources(self, &vault.book.accounts), "deviceTrusted": self.device_token.is_file(), "manualOrder": vault.book.manual_order, "hasCustomOrder": vault.book.has_custom_order
             }),
             None => json!({
                 "phase": if self.path.exists() { "locked" } else { "new" },
@@ -930,7 +930,7 @@ async fn refresh_accounts(
     let mut tasks = tokio::task::JoinSet::new();
     let mut results = std::collections::HashMap::new();
     loop {
-        while tasks.len() < 3 {
+        while tasks.len() < 5 {
             let Some((id, email, link)) = connections.next() else {
                 break;
             };

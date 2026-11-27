@@ -83,7 +83,9 @@ export function UsageView({book, busy, addSource, assignSource, removeSource}: U
   const [outcome, setOutcome] = useState<{key: string; data?: LocalUsage; error?: string}>();
   const fromDay = range === 'all' ? null : localDay(offsets[range]);
   const from = fromDay ? new Date(fromDay + 'T00:00').getTime() : null;
-  const sourceKey = book.usageSources.map(source => source.id + ':' + (source.accountId ?? '')).join(',');
+  const sources = [...book.usageSources, ...book.usageManaged];
+  const profiles = book.accounts.flatMap(row => row.linkProfile ? [[row.linkProfile, row.observed?.userId, row.observed?.state === 'identityMismatch']] : []);
+  const sourceKey = sources.length || profiles.length ? JSON.stringify([sources, profiles]) : '';
   const hourly = range === 'today';
   const key = JSON.stringify([range, from, account, model, page, rescan, sourceKey]);
   const result = outcome?.key === key ? outcome : undefined;
@@ -147,7 +149,7 @@ export function UsageView({book, busy, addSource, assignSource, removeSource}: U
           ' · 上次同步 ' + new Date(data.scannedAt).toLocaleTimeString('zh-CN', {hour12: false}) :
         '接入 Codex 会话目录后可统计历史请求。多个账号混用的目录可保留为未归属。'}</p>
       {!!data?.unassigned.requests && <p className="usage-note">未归属的请求可在<button type="button" className="usage-link" onClick={() => setManage(true)}>日志设置</button>中为对应目录指定账号。</p>}
-      {!sourceKey && <div className="usage-toolbar usage-setup">
+      {!sources.length && !data?.files && <div className="usage-toolbar usage-setup">
         <Button kind="primary" disabled={!!busy} onClick={() => void addSource(null, true)}><FolderPlus size={16}/> 接入默认 Codex 日志</Button>
         <Button disabled={!!busy} onClick={() => setManage(true)}>选择其他目录</Button>
       </div>}
@@ -213,7 +215,10 @@ export function UsageView({book, busy, addSource, assignSource, removeSource}: U
           <Button disabled={!!busy} onClick={() => void addSource(sourceAccount || null, false)}><FolderPlus size={16}/> 选择日志目录</Button>
           <Button disabled={!!busy} onClick={() => void addSource(sourceAccount || null, true)}>使用默认目录</Button>
         </div>
-        <p className="usage-note">默认日志目录可能包含多个账号。确认整个目录属于同一账号时，可在下面指定归属，已导入的请求会重新统计。混用目录请保留为未归属。</p>
+        <p className="usage-note">带有可信账号身份的会话或来自独立账号配置的日志可自动归属。默认目录可能包含多个账号，只有确认整个目录属于同一账号时才指定归属。</p>
+        {book.usageManaged.map(source => <div className="usage-source" key={source.folder}>
+          <strong>{name(source.accountId)} · 自动识别</strong><span title={source.folder}>{source.folder}</span>
+        </div>)}
         {book.usageSources.map(source => <div className="usage-source" key={source.id}>
           <label className="filter-select"><span className="sr-only">目录归属 {source.folder}</span>
             <select value={source.accountId ?? ''} disabled={!!busy} onChange={event => {

@@ -25,7 +25,7 @@ if (mode === 'seed') {
   await page.getByLabel('主密码', {exact: true}).fill(master);
   await page.getByLabel('确认主密码', {exact: true}).fill(master);
   await named('创建并解锁').click();
-  await gate('账号台账').waitFor();
+  await gate(/^账号(?:台账|枢纽)$/).waitFor();
   await named('新增账号').first().click();
   const form = page.getByRole('dialog', {name: '新增账号'});
   await form.getByLabel('登录邮箱').fill(existing);
@@ -41,7 +41,7 @@ if (mode === 'seed') {
   await page.getByLabel('主密码', {exact: true}).fill(master);
   await page.getByLabel('信任此设备，记住主密码').check();
   await named('解锁').click();
-  await gate('账号台账').waitFor();
+  await gate(/^账号(?:台账|枢纽)$/).waitFor();
   await page.getByRole('button', {name: '查看 GPT-001 详情'}).click();
   await details.getByText('已由 v0.1.0 写入').waitFor();
   await named('显示密码').click();
@@ -112,10 +112,10 @@ if (mode === 'seed') {
   await named('锁定').click();
   await gate('解锁账号库').waitFor();
   await named('使用本机解锁').click();
-  await gate('账号台账').waitFor();
+  await gate(/^账号(?:台账|枢纽)$/).waitFor();
   console.log('PASS: preview and import, status defaults, drag and keyboard order, enlarged details, CLI detection and device unlock');
 } else if (mode === 'restart') {
-  await gate('账号台账').waitFor();
+  await gate(/^账号(?:台账|枢纽)$/).waitFor();
   const rows = await tableRows();
   assert(rows[0].includes(existing) && rows[1].includes('next@example.com') && rows[2].includes('imported@example.com'));
   assert.equal(await page.getByLabel('排序方式').inputValue(), 'manual');
@@ -135,7 +135,7 @@ if (mode === 'seed') {
   await page.getByText('主密码不正确，或文件已损坏。', {exact: true}).waitFor();
   await page.getByLabel('主密码', {exact: true}).fill(master);
   await named('解锁').click();
-  await gate('账号台账').waitFor();
+  await gate(/^账号(?:台账|枢纽)$/).waitFor();
   console.log('PASS: revocation survives restart and master password remains valid');
 } else {
   throw new Error('Invalid test phase');

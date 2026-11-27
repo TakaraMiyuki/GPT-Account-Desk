@@ -1,4 +1,8 @@
-use crate::{get_account, usage, AppState, LOCKED};
+use crate::{
+    get_account,
+    model::{Account, ConnectionState},
+    usage, AppState, LOCKED,
+};
 use serde_json::Value;
 use std::{path::Path, sync::Arc};
 use tauri::{AppHandle, Manager, State};
@@ -8,7 +12,38 @@ use uuid::Uuid;
 pub struct Cache {
     pub generation: u64,
     pub sources: Vec<usage::Source>,
+    pub managed: Vec<usage::Source>,
+    pub identities: usage::Identities,
     pub index: Arc<usage::Index>,
+}
+
+pub fn managed_sources(state: &AppState, accounts: &[Account]) -> Vec<usage::Source> {
+    let Ok(profiles_root) = state.profiles.canonicalize() else {
+        return Vec::new();
+    };
+    let mut sources = Vec::new();
+    for row in accounts {
+        let Some(link) = row.link.as_ref().filter(|link| {
+            row.info.email.eq_ignore_ascii_case(&link.email)
+                && !matches!(link.observation.state, ConnectionState::IdentityMismatch)
+        }) else {
+            continue;
+        };
+        let profile = profiles_root.join(link.profile.to_string());
+        for name in ["sessions", "archived_sessions"] {
+            let Ok(folder) = profile.join(name).canonicalize() else {
+                continue;
+            };
+            if folder.starts_with(&profile) && folder.is_dir() {
+                sources.push(usage::Source {
+                    id: link.profile,
+                    account_id: Some(row.info.id),
+                    folder,
+                });
+            }
+        }
+    }
+    sources
 }
 
 #[tauri::command]
@@ -122,6 +157,25 @@ pub fn remove_usage_source(state: State<AppState>, id: Uuid) -> Result<Value, St
     Ok(state.view(&inner))
 }
 
+fn known_identities(accounts: &[Account]) -> usage::Identities {
+    let mut result = usage::Identities::new();
+    for row in accounts {
+        let Some(link) = row.link.as_ref().filter(|link| {
+            row.info.email.eq_ignore_ascii_case(&link.email)
+                && !matches!(link.observation.state, ConnectionState::IdentityMismatch)
+        }) else {
+            continue;
+        };
+        if let Some(user_id) = &link.observation.user_id {
+            result
+                .entry(user_id.clone())
+                .and_modify(|current| *current = None)
+                .or_insert(Some(row.info.id));
+        }
+    }
+    result
+}
+
 #[tauri::command]
 pub async fn local_usage(
     app: AppHandle,
@@ -130,12 +184,17 @@ pub async fn local_usage(
 ) -> Result<usage::LocalUsage, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
-        let (generation, sources) = {
+        let (generation, sources, managed, identities) = {
             let mut inner = state.guard()?;
             inner.expire();
             let generation = inner.generation;
-            let sources = inner.vault()?.book.usage_sources.clone();
-            (generation, sources)
+            let book = &inner.vault()?.book;
+            (
+                generation,
+                book.usage_sources.clone(),
+                managed_sources(&state, &book.accounts),
+                known_identities(&book.accounts),
+            )
         };
         let previous = if rescan {
             None
@@ -145,22 +204,34 @@ pub async fn local_usage(
                 .lock()
                 .map_err(|_| "无法读取用量缓存。")?
                 .as_ref()
-                .filter(|cache| generation == cache.generation && sources == cache.sources)
+                .filter(|cache| {
+                    generation == cache.generation
+                        && sources == cache.sources
+                        && managed == cache.managed
+                        && identities == cache.identities
+                })
                 .map(|cache| Arc::clone(&cache.index))
         };
-        let index = previous.unwrap_or_else(|| Arc::new(usage::Index::scan(&sources)));
+        let index = previous
+            .unwrap_or_else(|| Arc::new(usage::Index::scan(&sources, &managed, &identities)));
         let result = index.query(&query);
         let mut inner = state.guard()?;
         inner.expire();
         if inner.generation != generation {
             return Err(LOCKED.into());
         }
-        if inner.vault()?.book.usage_sources != sources {
+        let book = &inner.vault()?.book;
+        if book.usage_sources != sources
+            || managed_sources(&state, &book.accounts) != managed
+            || known_identities(&book.accounts) != identities
+        {
             return Err("日志来源已变更，请刷新。".into());
         }
         *state.usage_cache.lock().map_err(|_| "无法保存用量缓存。")? = Some(Cache {
             generation,
             sources,
+            managed,
+            identities,
             index,
         });
         Ok(result)
