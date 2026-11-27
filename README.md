@@ -1,12 +1,22 @@
-# 账号簿 v0.1.7
+# 账号簿 · Account Desk
 
-用于个人使用的 Windows 本地 ChatGPT 账号枢纽。使用 Rust、Tauri 2 和 React/TypeScript。
+面向个人使用的 Windows 本地 ChatGPT 账号管理工具。可以在同一处整理账号、查看 Codex 额度和统计本机会话用量。
+
+## 功能概览
+
+- 通过**账号台账**管理邮箱、密码、TOTP、改绑状态和续费信息，支持批量导入和自定义排序。
+- 使用主密码保护**本地加密账号库**，支持备份、恢复和本机解锁。
+- 连接账号后查看 **Codex 额度**、重置时间和可用的重置卡。
+- 从本机 Codex 会话日志统计 **Token、请求数、缓存命中率和估算成本**。
+- 通过 **PriceAI** 查看 ChatGPT Plus 报价、历史区间和库存。
 
 ## 安装与升级
 
-解压 Windows x64 压缩包，双击 **Account Desk.exe**。请把随附的 `WebView2Loader.dll` 与程序放在同一目录。运行需要 Microsoft Edge WebView2 Runtime。
+1. 下载 Windows x64 ZIP。 [下载 v0.1.7](https://github.com/TakaraMiyuki/GPT-Account-Desk/releases/download/v0.1.7/Account-Desk-v0.1.7-windows-x64.zip) · [发布说明与 SHA-256](https://github.com/TakaraMiyuki/GPT-Account-Desk/releases/tag/v0.1.7)
+2. 解压后双击 **Account Desk.exe**。请将随附的 `WebView2Loader.dll` 与程序放在同一目录。运行需要 Microsoft Edge WebView2 Runtime。
+3. 首次启动时设置主密码。使用 Codex 额度功能时，在「设置与备份」中配置 Codex CLI。
 
-升级时先关闭旧版，再运行新版。默认数据目录为 `%LOCALAPPDATA%\local.accountdesk.vault`，新版会读取原有账号、设置和本机 Codex 连接。若旧版使用了 `--data-dir`，新版也使用同一个路径，例如 `--data-dir "F:\我的账号库"`。
+升级时先关闭旧版，再运行新版。默认数据目录为 `%LOCALAPPDATA%\local.accountdesk.vault`，新版会读取原有账号、设置和本机 Codex 连接。若旧版使用了 `--data-dir`，新版也使用同一个路径，例如 `--data-dir "D:\我的账号库"`。
 
 ## 台账操作
 
@@ -48,7 +58,7 @@
 
 ## 开发与构建
 
-在 Windows 上从仓库根目录运行以下命令。
+应用使用 Rust、Tauri 2、React 和 TypeScript。在 Windows 上从仓库根目录运行以下命令。
 
 ```powershell
 ./tools/dev.ps1 -Task Setup
