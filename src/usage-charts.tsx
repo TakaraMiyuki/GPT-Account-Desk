@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 
-export type UsagePoint = {key: string; value: number | null; time?: number};
+export type UsagePoint = {key: string; value: number | null; time?: number; label?: string; endpoint?: boolean};
 
 const shortNumber = new Intl.NumberFormat('zh-CN', {notation: 'compact', maximumFractionDigits: 2});
 const shortKey = (key: string) => key.includes('T') ? key.slice(-5) : key.slice(5);
@@ -12,20 +12,21 @@ const xPosition = (points: UsagePoint[], index: number) => {
     ? (time - start) / (end - start) : (index + .5) / points.length;
 };
 
-export function UsageCharts({points, format, metric, hourly, mode, axisFormat}: {
+export function UsageCharts({points, format, metric, hourly, mode, axisFormat, step = false, detail}: {
   points: UsagePoint[]; format: (value: number) => string; metric: string; hourly: boolean;
   mode: 'line' | 'bar' | 'matrix'; axisFormat?: (value: number) => string;
+  step?: boolean; detail?: (point: UsagePoint) => ReactNode;
 }) {
   const [picked, setPicked] = useState<string | null>(null);
   const point = points.find(item => item.key === picked);
   if (!points.some(item => item.value !== null)) return <p className="usage-empty">所选范围暂无可绘制的用量数据。</p>;
-  const show = (item: UsagePoint) => item.key.replace('T', ' ') + ' · ' + (item.value === null ? '无记录' : format(item.value));
+  const show = (item: UsagePoint) => (item.label ?? item.key.replace('T', ' ')) + ' · ' + (item.value === null ? '无记录' : format(item.value));
   const peak = points.reduce((max, item) => Math.max(max, item.value ?? 0), 0);
   const weekday = new Date(points[0].key.slice(0, 10) + 'T12:00').getDay();
   const offset = !hourly && Number.isFinite(weekday) ? (weekday + 6) % 7 : 0;
   return <>
     {mode !== 'matrix' ? <Plot points={points} mode={mode} title={metric + (mode === 'line' ? '折线图' : '柱状图')}
-      pick={setPicked} axisFormat={axisFormat}/> : <>
+      pick={setPicked} axisFormat={axisFormat} step={step} picked={picked}/> : <>
     <div className="usage-matrix-heading"><h3>{metric}点阵图</h3><span>{hourly ? '每列 4 小时' : '每列 1 周 · 周一至周日'}</span></div>
     <div className="usage-matrix-scroll">
       <div className={hourly ? 'usage-matrix usage-matrix-hourly' : 'usage-matrix'}>
@@ -39,12 +40,14 @@ export function UsageCharts({points, format, metric, hourly, mode, axisFormat}: 
       </div>
     </div>
     </>}
-    <p className="usage-chart-caption">{point ? show(point) : '指向图表查看对应时段。'}</p>
+    <p className="usage-chart-caption">{point ? <>{show(point)}{detail?.(point)}</>
+      : step ? '指向变化点，或用方向键查看商家与报价。' : '指向图表查看对应时段。'}</p>
   </>;
 }
 
-function Plot({points, mode, title, pick, axisFormat}: {
+function Plot({points, mode, title, pick, axisFormat, step, picked}: {
   points: UsagePoint[]; mode: 'line' | 'bar'; title: string; pick: (key: string) => void; axisFormat?: (value: number) => string;
+  step: boolean; picked: string | null;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
@@ -77,14 +80,21 @@ function Plot({points, mode, title, pick, axisFormat}: {
       ctx.fillStyle = mode === 'bar' ? '#459774' : '#267153';
       let prior: {x: number; y: number} | null = null;
       points.forEach((item, index) => {
+        const x = left + (right - left) * xPosition(points, index);
+        if (step && prior) {
+          ctx.beginPath(); ctx.moveTo(prior.x, prior.y); ctx.lineTo(x, prior.y); ctx.stroke();
+        }
         if (item.value === null) { prior = null; return; }
-        const x = left + (right - left) * xPosition(points, index), y = bottom - item.value / ceiling * (bottom - top);
+        const y = bottom - item.value / ceiling * (bottom - top);
         if (mode === 'bar') {
           const size = Math.min(25, spacing * .68);
           ctx.fillRect(x - size / 2, y, size, Math.max(1, bottom - y));
         } else {
-          if (prior) { ctx.beginPath(); ctx.moveTo(prior.x, prior.y); ctx.lineTo(x, y); ctx.stroke(); }
-          ctx.beginPath(); ctx.arc(x, y, points.length > 45 ? 1.5 : 3, 0, Math.PI * 2); ctx.fill();
+          if (prior) { ctx.beginPath(); ctx.moveTo(step ? x : prior.x, prior.y); ctx.lineTo(x, y); ctx.stroke(); }
+          if (!item.endpoint) {
+            const radius = step && item.key === picked ? 5 : points.length > 45 ? 1.5 : 3;
+            ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.fill();
+          }
           prior = {x, y};
         }
       });
@@ -94,7 +104,7 @@ function Plot({points, mode, title, pick, axisFormat}: {
       points.forEach((item, index) => {
         if (index % tickStep !== 0) return;
         const x = left + (right - left) * xPosition(points, index);
-        const label = item.time == null ? shortKey(item.key) : item.key;
+        const label = item.label ?? (item.time == null ? shortKey(item.key) : item.key);
         const labelWidth = ctx.measureText(label).width;
         const labelLeft = Math.max(left, Math.min(x - labelWidth / 2, right - labelWidth));
         if (labelLeft <= lastLabelEnd) return;
@@ -107,17 +117,30 @@ function Plot({points, mode, title, pick, axisFormat}: {
     observer.observe(element);
     draw();
     return () => observer.disconnect();
-  }, [mode, points, axisFormat]);
+  }, [mode, points, axisFormat, step, step ? picked : null]);
 
+  const selectable = step ? points.filter(point => !point.endpoint && point.value !== null) : points;
   return <figure className="usage-plot">
     <figcaption>{title}</figcaption>
-    <canvas ref={canvas} role="img" aria-label={title} onPointerMove={event => {
+    <canvas ref={canvas} role="img" aria-label={title} tabIndex={step ? 0 : undefined} onKeyDown={event => {
+      if (!step || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+      event.preventDefault();
+      const current = selectable.findIndex(item => item.key === picked);
+      const next = current + (event.key === 'ArrowRight' ? 1 : -1);
+      const selected = selectable[Math.max(0, Math.min(selectable.length - 1, next))];
+      if (selected) pick(selected.key);
+    }} onPointerMove={event => {
       const bounds = event.currentTarget.getBoundingClientRect();
       const position = (event.clientX - bounds.left - 65) / Math.max(1, bounds.width - 77);
       if (position < 0 || position > 1 || !points.length) return;
-      const closest = points.reduce((best, _, index) =>
-        Math.abs(xPosition(points, index) - position) < Math.abs(xPosition(points, best) - position) ? index : best, 0);
-      pick(points[closest].key);
+      let closest = Infinity;
+      let selected: UsagePoint | undefined;
+      points.forEach((item, index) => {
+        if (step && (item.endpoint || item.value === null)) return;
+        const distance = Math.abs(xPosition(points, index) - position);
+        if (distance < closest) { selected = item; closest = distance; }
+      });
+      if (selected) pick(selected.key);
     }}/>
   </figure>;
 }

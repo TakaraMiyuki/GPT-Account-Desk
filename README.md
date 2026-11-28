@@ -12,7 +12,7 @@
 
 ## 安装与升级
 
-1. 下载 Windows x64 ZIP。 [下载 v0.1.7](https://github.com/TakaraMiyuki/GPT-Account-Desk/releases/download/v0.1.7/Account-Desk-v0.1.7-windows-x64.zip) · [发布说明与 SHA-256](https://github.com/TakaraMiyuki/GPT-Account-Desk/releases/tag/v0.1.7)
+1. 下载 Windows x64 ZIP。 [下载 v0.1.8](https://github.com/TakaraMiyuki/GPT-Account-Desk/releases/download/v0.1.8/Account-Desk-v0.1.8-windows-x64.zip) · [发布说明与 SHA-256](https://github.com/TakaraMiyuki/GPT-Account-Desk/releases/tag/v0.1.8)
 2. 解压后双击 **Account Desk.exe**。请将随附的 `WebView2Loader.dll` 与程序放在同一目录。运行需要 Microsoft Edge WebView2 Runtime。
 3. 首次启动时设置主密码。使用 Codex 额度功能时，在「设置与备份」中配置 Codex CLI。
 
@@ -51,7 +51,8 @@
 ## 价格监控
 
 - 打开「价格监控」后从 PriceAI 的 Price Radar 读取 ChatGPT Plus 报价。首次同步成功后，程序运行时约每 5 分钟检查一次。点「刷新报价」可主动检查，重复检查有频率限制。
-- 近 24 小时和近 7 天的峰价、谷价基于已保存快照各自的最低报价。本机从首次同步开始积累记录，图上显示实际覆盖时间。报价来源为 PriceAI，数据延迟或断开时显示上次快照及提示。
+- 走势在最低价或对应商家变化时标点。指向变化点可查看当时的报价和商家，带链接的商家可以打开原报价页。近 24 小时和近 7 天的峰价、谷价取各次快照最低价的最高值和最低值，下方显示各价位在区间内最长连续持续时间，统计到最后一份快照。
+- 报价列表标注「自建卡网」。勾选「过滤自建卡网」后，从接口公开的 16688 和链动小铺等已识别平台报价中计算最低价并展示有货报价。缺少渠道资料的旧快照仍可在未过滤时查看。
 - 价位筛选覆盖 Price Radar 的前 5 条报价和单列最低价；未提供库存数的有货报价单独计数。「全部有货报价」为来源提供的商品总览计数。价格缓存保存在当前数据目录，与加密台账分开。
 
 [PriceAI Price Radar 文档](https://priceai.cc/price-radar-api.md)

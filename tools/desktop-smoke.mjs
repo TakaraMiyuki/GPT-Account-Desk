@@ -126,13 +126,24 @@ require('node:readline').createInterface({input: process.stdin}).on('line', line
   await writeFile(join(data,'codex-path.txt'),process.execPath);
   await writeFile(join(data,'atlas-fixture-profile.txt'),accounts[0].link.profile);
   if (mode === 'fixture') {
-    const current = {time:now - 120,lowest:10,offerCount:18,inStockCount:13,stale:false,offers:[
-      {id:'a',merchant:'渠道甲',title:'模拟 Plus 商品一',price:10,available:true,stock:12},
-      {id:'b',merchant:'渠道乙',title:'模拟 Plus 商品二',price:11,available:true,stock:null},
-      {id:'c',merchant:'渠道丙',title:'模拟 Plus 商品三',price:20,available:true,stock:4},
-      {id:'d',merchant:'渠道丁',title:'模拟 Plus 商品四',price:12,available:false,stock:0}
+    const quote = (price, id, name) => ({price,source:{id,name,url:'https://example.com/' + id}});
+    const initial = {overall:quote(8,'old','渠道原'),marketplace:quote(9,'board','平台商家')};
+    const switched = {...initial,overall:quote(8,'new','渠道新')};
+    const latest = {overall:quote(10,'a','渠道甲'),marketplace:quote(11,'b','渠道乙')};
+    const current = {time:now - 60,lowest:10,sources:latest,offerCount:18,inStockCount:13,stale:false,offers:[
+      {id:'a',merchant:'渠道甲',title:'模拟 Plus 商品一',price:10,available:true,stock:12,selfHosted:true},
+      {id:'b',merchant:'渠道乙',title:'模拟 Plus 商品二',price:11,available:true,stock:null,selfHosted:false},
+      {id:'c',merchant:'渠道丙',title:'模拟 Plus 商品三',price:20,available:true,stock:4,selfHosted:false},
+      {id:'d',merchant:'渠道丁',title:'模拟 Plus 商品四',price:12,available:false,stock:0,selfHosted:false}
     ]};
-    const history = [{time:now-2*86400,lowest:17},{time:now-7200,lowest:8},{time:current.time,lowest:10}];
+    const history = [
+      {time:now-2*86400,lowest:17},
+      {time:now-7200,lowest:8,sources:initial},
+      {time:now-6900,lowest:8,sources:initial},
+      {time:now-5400,lowest:8,sources:switched},
+      {time:now-120,lowest:10,sources:latest},
+      {time:current.time,lowest:10,sources:latest}
+    ];
     await writeFile(join(data,'priceai-snapshots.json'),JSON.stringify({etag:null,snapshot_id:'demo',view:{checkedAt:now,current,history}}));
   }
 }
@@ -163,7 +174,14 @@ if (mode === 'live') {
   assert(saved.snapshot_id);
   assert(saved.view.current.offers.length > 0);
   assert(saved.view.history.length >= 1);
-  console.log('PASS: real PriceAI pointer, immutable snapshot and local history', saved.snapshot_id);
+  const current = saved.view.current;
+  assert(current.sources);
+  const offers = page.getByRole('table',{name:'可见报价与库存'});
+  assert.equal(await offers.getByText('自建卡网',{exact:true}).count(),current.offers.filter(offer => offer.selfHosted).length);
+  await page.getByRole('checkbox',{name:'过滤自建卡网'}).check();
+  assert.equal(await offers.locator('tbody tr').count(),current.offers.filter(offer => offer.selfHosted === false).length);
+  assert.equal(await offers.getByText('自建卡网',{exact:true}).count(),0);
+  console.log('PASS: real PriceAI snapshot, storefront labels, filtering and local history', saved.snapshot_id);
   await screenshot('price-live.png');
   await browser.close();
   process.exit(0);
@@ -297,16 +315,37 @@ assert.equal(await card('Token 消耗').textContent(),'80');
 assert.equal(await logs.count(),2);
 await button('价格监控').click();
 const priceCard = title => page.getByRole('region',{name:'价格概览'}).locator('.stat-card').filter({hasText:title}).locator('strong');
-await page.getByText(/已记录 2 个快照/).waitFor();
+const chart = page.getByRole('img',{name:'最低报价折线图'});
+await chart.waitFor();
 assert.match(await priceCard('区间峰价').textContent(), /10/);
 assert.match(await priceCard('区间谷价').textContent(), /8/);
-const interval = priceCard('区间峰价').locator('..').locator('small');
-assert.match(await interval.textContent(), /\d{2}\/\d{2} .* – \d{2}\/\d{2}/);
-const dailyInterval = await interval.textContent();
+const duration = title => priceCard(title).locator('..').locator('small');
+assert.equal(await duration('区间峰价').textContent(), '最长持续 1 分钟');
+assert.equal(await duration('区间谷价').textContent(), '最长持续 1 小时 58 分钟');
+await chart.hover({position:{x:75,y:70}});
+await button('渠道原').waitFor();
+await chart.press('ArrowRight');
+await button('渠道新').waitFor();
+await chart.press('ArrowRight');
+await button('渠道甲').waitFor();
+const offers = page.getByRole('table',{name:'可见报价与库存'});
+await offers.getByText('自建卡网',{exact:true}).waitFor();
 await button('近 7 天').click();
-await page.getByText(/已记录 3 个快照/).waitFor();
 assert.match(await priceCard('区间峰价').textContent(), /17/);
-assert.notEqual(await interval.textContent(),dailyInterval);
+const filter = page.getByRole('checkbox',{name:'过滤自建卡网'});
+await filter.check();
+assert.match(await priceCard('最新最低价').textContent(), /11/);
+assert.match(await priceCard('区间谷价').textContent(), /9/);
+assert.match(await priceCard('区间峰价').textContent(), /11/);
+assert.equal(await offers.getByText('渠道甲',{exact:true}).count(),0);
+await chart.press('ArrowRight');
+await button('平台商家').waitFor();
+await chart.press('ArrowRight');
+await button('渠道乙').waitFor();
+await button('用量统计').click();
+await button('价格监控').click();
+assert(await filter.isChecked());
+await filter.uncheck();
 await page.getByLabel('最高价').fill('11');
 assert.equal(await page.getByRole('table',{name:'可见报价与库存'}).locator('tbody tr').count(),2);
 await page.getByText('2 条有货 · 已知库存 12 · 1 条有货报价未提供数量',{exact:true}).waitFor();

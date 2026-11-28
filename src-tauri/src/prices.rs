@@ -61,11 +61,20 @@ impl PriceStore {
         let client = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(14))
-            .user_agent("AccountDesk/0.1.6 (PriceAI Price Radar)")
+            .user_agent(concat!(
+                "AccountDesk/",
+                env!("CARGO_PKG_VERSION"),
+                " (PriceAI Price Radar)"
+            ))
             .build()
             .map_err(|_| "无法初始化 HTTPS 连接。")?;
         let mut request = client.get(LATEST);
-        if let Some(etag) = &disk.etag {
+        let needs_sources = disk
+            .view
+            .current
+            .as_ref()
+            .is_some_and(|current| current.sources.is_none());
+        if let Some(etag) = disk.etag.as_ref().filter(|_| !needs_sources) {
             request = request.header(header::IF_NONE_MATCH, etag);
         }
         let response = request
@@ -82,7 +91,7 @@ impl PriceStore {
             if pointer.schema_version != SCHEMA || !valid_snapshot_url(&pointer) {
                 return Err("PriceAI 返回了无法识别的快照地址。".into());
             }
-            if disk.snapshot_id.as_deref() != Some(&pointer.snapshot_id) {
+            if needs_sources || disk.snapshot_id.as_deref() != Some(&pointer.snapshot_id) {
                 let response = client
                     .get(&pointer.snapshot_url)
                     .send()
@@ -160,6 +169,7 @@ impl Disk {
             self.view.history.push(PricePoint {
                 time: current.time,
                 lowest: current.lowest,
+                sources: current.sources.clone(),
             });
             self.view.history.sort_unstable_by_key(|point| point.time);
         }
@@ -191,15 +201,20 @@ struct Current {
     in_stock_count: Option<u64>,
     offers: Vec<Offer>,
     stale: bool,
+    #[serde(default)]
+    sources: Option<PriceSources>,
 }
 
 #[derive(Serialize, Deserialize)]
 struct PricePoint {
     time: i64,
     lowest: Option<f64>,
+    #[serde(default)]
+    sources: Option<PriceSources>,
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Offer {
     id: String,
     merchant: String,
@@ -207,6 +222,29 @@ struct Offer {
     price: f64,
     available: bool,
     stock: Option<u64>,
+    #[serde(default)]
+    self_hosted: Option<bool>,
+    #[serde(default)]
+    source: Option<MerchantSource>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct PriceSources {
+    overall: Option<PriceQuote>,
+    marketplace: Option<PriceQuote>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct PriceQuote {
+    price: f64,
+    source: MerchantSource,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct MerchantSource {
+    id: String,
+    name: String,
+    url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -248,8 +286,10 @@ struct Product {
 #[derive(Deserialize)]
 struct FeedOffer {
     id: String,
+    source_id: Option<String>,
     source_name: Option<String>,
     source_store_name: Option<String>,
+    url: Option<String>,
     title: String,
     price: f64,
     currency: String,
@@ -263,13 +303,29 @@ impl FeedOffer {
         if self.currency != "CNY" || !valid_price(self.price) || self.id.is_empty() {
             return None;
         }
+        let merchant = self
+            .source_store_name
+            .filter(|name| !name.trim().is_empty())
+            .or(self.source_name.filter(|name| !name.trim().is_empty()));
+        let url = self.url.as_deref().and_then(web_url);
+        let source_id = self.source_id.as_deref().unwrap_or_default();
+        let self_hosted = classify_source(source_id, url.as_ref());
+        let name = merchant
+            .as_deref()
+            .or((!source_id.is_empty()).then_some(source_id))
+            .or_else(|| url.as_ref().and_then(reqwest::Url::host_str));
+        let source = name.map(|name| MerchantSource {
+            id: if source_id.is_empty() {
+                name.to_owned()
+            } else {
+                source_id.to_owned()
+            },
+            name: name.to_owned(),
+            url: url.as_ref().map(ToString::to_string),
+        });
         Some(Offer {
             id: self.id,
-            merchant: self
-                .source_store_name
-                .filter(|value| !value.is_empty())
-                .or(self.source_name)
-                .unwrap_or_else(|| "未知渠道".into()),
+            merchant: name.unwrap_or("未知渠道").to_owned(),
             title: self.title,
             price: self.price,
             available: self
@@ -277,8 +333,38 @@ impl FeedOffer {
                 .as_deref()
                 .map_or(self.status == "in_stock", |value| value == "available"),
             stock: self.stock_count,
+            self_hosted,
+            source,
         })
     }
+}
+
+fn web_url(value: &str) -> Option<reqwest::Url> {
+    reqwest::Url::parse(value).ok().filter(|url| {
+        matches!(url.scheme(), "http" | "https")
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+    })
+}
+
+fn classify_source(source_id: &str, url: Option<&reqwest::Url>) -> Option<bool> {
+    let host = url.and_then(reqwest::Url::host_str);
+    // Price Radar exposes source IDs and listing URLs, without a storefront type field.
+    if source_id.starts_with("16688-")
+        || source_id.starts_with("ldxp-")
+        || host.is_some_and(|host| {
+            ["16688.store", "wzyp.cn"].iter().any(|platform| {
+                host == *platform
+                    || host
+                        .strip_suffix(platform)
+                        .is_some_and(|prefix| prefix.ends_with('.'))
+            })
+        })
+    {
+        return Some(false);
+    }
+    host.map(|_| true)
 }
 
 fn valid_price(price: f64) -> bool {
@@ -299,6 +385,16 @@ fn current_snapshot(product: Product, stale: bool) -> Result<Current, String> {
         .filter(|offer| offer.currency == "CNY")
         .and(product.lowest_price)
         .filter(|value| valid_price(*value));
+    let lowest_offer = product.lowest_offer.and_then(FeedOffer::display);
+    let overall = lowest_offer
+        .as_ref()
+        .filter(|offer| Some(offer.price) == lowest)
+        .and_then(|offer| {
+            offer.source.clone().map(|source| PriceQuote {
+                price: offer.price,
+                source,
+            })
+        });
     let mut offers: Vec<_> = product
         .top_offers
         .into_iter()
@@ -307,12 +403,21 @@ fn current_snapshot(product: Product, stale: bool) -> Result<Current, String> {
         .collect();
     let mut seen = std::collections::HashSet::new();
     offers.retain(|offer| seen.insert(offer.id.clone()));
-    if let Some(offer) = product.lowest_offer.and_then(FeedOffer::display) {
+    if let Some(offer) = lowest_offer {
         if seen.insert(offer.id.clone()) {
             offers.push(offer);
         }
     }
     offers.sort_by(|a, b| a.price.total_cmp(&b.price));
+    let marketplace = offers
+        .iter()
+        .filter(|offer| offer.available && offer.self_hosted == Some(false))
+        .find_map(|offer| {
+            offer.source.clone().map(|source| PriceQuote {
+                price: offer.price,
+                source,
+            })
+        });
     Ok(Current {
         time,
         lowest,
@@ -320,6 +425,10 @@ fn current_snapshot(product: Product, stale: bool) -> Result<Current, String> {
         in_stock_count: product.in_stock_count,
         offers,
         stale,
+        sources: Some(PriceSources {
+            overall,
+            marketplace,
+        }),
     })
 }
 
@@ -340,9 +449,12 @@ pub async fn sync_prices(state: State<'_, AppState>, manual: bool) -> Result<Pri
 }
 
 #[tauri::command]
-pub fn open_price_source() -> Result<(), String> {
-    open::that("https://priceai.cc/products/chatgpt-plus")
-        .map_err(|_| "无法打开 PriceAI 报价页。".into())
+pub fn open_price_source(url: Option<String>) -> Result<(), String> {
+    let url = url
+        .as_deref()
+        .unwrap_or("https://priceai.cc/products/chatgpt-plus");
+    let url = web_url(url).ok_or("这条报价没有有效的网页链接。")?;
+    open::that(url.as_str()).map_err(|_| "无法打开 PriceAI 报价页。".into())
 }
 
 #[cfg(test)]
@@ -360,6 +472,7 @@ mod tests {
             in_stock_count: None,
             offers: Vec::new(),
             stale: false,
+            sources: None,
         };
         disk.accept(snapshot(now - RETENTION_SECONDS - 1, 1.0), now);
         disk.accept(snapshot(now - 300, 10.0), now);
@@ -383,5 +496,41 @@ mod tests {
         assert!(!valid_snapshot_url(&pointer));
         pointer.snapshot_url = "https://priceai.cc/v1/snapshots/20261127-abcd.json".into();
         assert!(!valid_snapshot_url(&pointer));
+    }
+
+    #[test]
+    fn captures_storefront_attribution_for_both_price_modes() {
+        let product = serde_json::from_value(serde_json::json!({
+            "id": PRODUCT, "snapshot_generated_at": "2026-11-28T12:00:00+08:00", "lowest_price": 6.8,
+            "lowest_offer": {"id": "direct", "source_id": "direct-store", "source_name": "独立商家",
+                "title": "Plus", "price": 6.8, "currency": "CNY", "status": "in_stock",
+                "url": "https://shop.example.com/item/1"},
+            "top_offers": [
+                {"id": "market-out", "source_id": "16688-s1", "source_name": "平台缺货",
+                    "title": "Plus", "price": 7, "currency": "CNY", "status": "sold_out"},
+                {"id": "market", "source_id": "nodebits-1", "source_name": "平台商家",
+                    "title": "Plus", "price": 9, "currency": "CNY", "status": "in_stock",
+                    "url": "https://www.wzyp.cn/item/9"},
+                {"id": "unknown", "source_name": "未知归属",
+                    "title": "Plus", "price": 8, "currency": "CNY", "status": "in_stock",
+                    "url": "javascript:alert(1)"}
+            ]
+        })).unwrap();
+        let current = current_snapshot(product, false).unwrap();
+        assert_eq!(current.offers[0].self_hosted, Some(true));
+        assert_eq!(current.offers[1].self_hosted, Some(false));
+        assert_eq!(current.offers[2].self_hosted, None);
+        let mut disk = Disk::default();
+        disk.accept(current, 0);
+        let sources = disk.view.history[0].sources.as_ref().unwrap();
+        assert_eq!(sources.overall.as_ref().unwrap().source.name, "独立商家");
+        let market = sources.marketplace.as_ref().unwrap();
+        assert_eq!(market.price, 9.0);
+        assert_eq!(
+            market.source.url.as_deref(),
+            Some("https://www.wzyp.cn/item/9")
+        );
+        let legacy: PricePoint = serde_json::from_str(r#"{"time":1,"lowest":17}"#).unwrap();
+        assert!(legacy.sources.is_none());
     }
 }

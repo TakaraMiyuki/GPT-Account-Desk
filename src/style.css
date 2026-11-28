@@ -505,3 +505,5 @@ td.detail-col button:focus-visible { outline-offset: -3px; }
 .price-inputs input { width: 95px; min-height: 35px; border: 1px solid var(--line); border-radius: 7px; padding-inline: 7px; background: var(--paper); }
 .price-stock-summary { margin-block: 12px; color: var(--green); font-weight: 650; }
 .price-offer-title { max-width: 420px; }
+.price-source-tag { display: inline-block; margin-inline-start: 6px; padding: 1px 6px; border-radius: 5px; background: #f8edda; color: #79551f; font-size: 11px; white-space: nowrap; }
+.price-source-link { padding: 0; border: 0; background: transparent; color: var(--green); font: inherit; text-decoration: underline; cursor: pointer; }
