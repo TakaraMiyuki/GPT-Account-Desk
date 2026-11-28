@@ -5,8 +5,8 @@ import { Button } from './ui';
 import { UsageCharts, type UsagePoint } from './usage-charts';
 
 type MerchantSource = {id: string; name: string; url: string | null};
-type Quote = {price: number; source: MerchantSource};
-type PriceSources = {overall: Quote | null; marketplace: Quote | null};
+type Quote = {source: MerchantSource; selfHosted?: boolean | null};
+type PriceSources = {overall: Quote | null};
 type Offer = {id: string; merchant: string; title: string; price: number; available: boolean; stock: number | null; selfHosted?: boolean | null};
 type Point = {time: number; lowest: number | null; sources?: PriceSources | null};
 type PriceData = {
@@ -32,31 +32,37 @@ function observedPrices(history: Point[], from: number, now: number, excludeSelf
   const durations = new Map<number, number>();
   const details = new Map<string, MerchantSource>();
   let previousPrice: number | null = null;
+  let previousVisiblePrice: number | null = null;
   let previousSource: MerchantSource | undefined;
+  let previousSelfHosted = false;
   let priceSince = from;
   const lastTime = samples[samples.length - 1].time;
   for (let index = first; index < samples.length; index += 1) {
     const sample = samples[index];
-    const quote = excludeSelfHosted ? sample.sources?.marketplace : sample.sources?.overall;
-    const value = excludeSelfHosted ? quote?.price ?? null : sample.lowest;
+    const quote = sample.sources?.overall;
+    const value = sample.lowest;
     const source = quote?.source;
+    const selfHosted = quote?.selfHosted === true;
+    const visiblePrice = excludeSelfHosted && selfHosted ? null : value;
     const at = sample.time;
-    if (value !== previousPrice) priceSince = at;
-    if (value !== null) {
+    if (visiblePrice !== previousVisiblePrice) priceSince = at;
+    if (visiblePrice !== null) {
       const until = samples[index + 1]?.time ?? lastTime;
-      durations.set(value, Math.max(durations.get(value) ?? 0, until - priceSince));
+      durations.set(visiblePrice, Math.max(durations.get(visiblePrice) ?? 0, until - priceSince));
     }
-    if (value !== previousPrice || source?.id !== previousSource?.id) {
+    if (value !== previousPrice || source?.id !== previousSource?.id || selfHosted !== previousSelfHosted) {
       const key = String(at);
-      series.push({key, time: at, label: time(at), value});
+      series.push({key, time: at, label: time(at), value, hidden: excludeSelfHosted && selfHosted});
       if (source) details.set(key, source);
     }
     previousPrice = value;
+    previousVisiblePrice = visiblePrice;
     previousSource = source;
+    previousSelfHosted = selfHosted;
   }
   const last = series.at(-1);
   if (last && last.time !== lastTime) {
-    series.push({key: String(lastTime), time: lastTime, label: time(lastTime), value: previousPrice, endpoint: true});
+    series.push({...last, key: String(lastTime), time: lastTime, label: time(lastTime), endpoint: true});
   }
   return {series, durations, details, sampleCount: samples.length - first};
 }
@@ -129,17 +135,16 @@ export function PriceView() {
   const min = minimum ? Number(minimum) : 0;
   const max = maximum ? Number(maximum) : Infinity;
   const invalidRange = !Number.isFinite(min) || (maximum !== '' && !Number.isFinite(max)) || min < 0 || max < min;
-  const eligible = (current?.offers ?? []).filter(offer => !excludeSelfHosted || offer.selfHosted === false);
+  const eligible = (current?.offers ?? []).filter(offer => !excludeSelfHosted || offer.selfHosted !== true);
   const visible = invalidRange ? [] : eligible.filter(offer => offer.price >= min && offer.price <= max);
   const inStock = visible.filter(offer => offer.available);
   const known = inStock.filter(offer => offer.stock !== null);
   const stockTotal = known.length ? known.reduce((total, offer) => total + (offer.stock ?? 0), 0) : null;
   const cards = [
-    {label: '最新最低价', value: price(excludeSelfHosted ? current?.sources?.marketplace?.price : current?.lowest), Icon: Coins},
+    {label: '最新最低价', value: price(excludeSelfHosted && current?.sources?.overall?.selfHosted ? null : current?.lowest), Icon: Coins},
     {label: '区间谷价', value: price(low), range: low === null ? undefined : durationLabel(durations.get(low)), Icon: ArrowDown},
     {label: '区间峰价', value: price(high), range: high === null ? undefined : durationLabel(durations.get(high)), Icon: ArrowUp},
-    {label: excludeSelfHosted ? '已展示平台有货报价' : '全部有货报价', value: number(excludeSelfHosted
-      ? current?.sources && eligible.filter(offer => offer.available).length : current?.inStockCount), Icon: Package},
+    {label: '全部有货报价', value: number(current?.inStockCount), Icon: Package},
   ];
 
   return <div className="usage-layout price-layout">
@@ -173,8 +178,8 @@ export function PriceView() {
     <section className="usage-panel">
       <div className="usage-heading"><h2>最低报价走势</h2></div>
       <p className="usage-note">最低价或商家变化时标点。峰谷持续时间按区间内最长连续时段计算，统计到最后一份快照。</p>
-      {excludeSelfHosted && <p className="usage-note">平台最低价取自接口公开的报价。旧快照缺少渠道资料，过滤时跳过。</p>}
-      {values.length > 0 ? <UsageCharts key={String(excludeSelfHosted) + ':' + windowDays} points={series} format={price}
+      {excludeSelfHosted && <p className="usage-note">原最低价来自自建卡网的时段留空。渠道未知的历史报价仍然显示。</p>}
+      {series.some(point => point.value !== null) ? <UsageCharts key={windowDays} points={series} format={price}
         axisFormat={price} metric="最低报价" mode="line" hourly={false} step detail={point => {
           const source = details.get(point.key);
           return source ? <> · {source.url ? <button type="button" className="price-source-link"

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
-export type UsagePoint = {key: string; value: number | null; time?: number; label?: string; endpoint?: boolean};
+export type UsagePoint = {key: string; value: number | null; time?: number; label?: string; endpoint?: boolean; hidden?: boolean};
 
 const shortNumber = new Intl.NumberFormat('zh-CN', {notation: 'compact', maximumFractionDigits: 2});
 const shortKey = (key: string) => key.includes('T') ? key.slice(-5) : key.slice(5);
@@ -18,7 +18,7 @@ export function UsageCharts({points, format, metric, hourly, mode, axisFormat, s
   step?: boolean; detail?: (point: UsagePoint) => ReactNode;
 }) {
   const [picked, setPicked] = useState<string | null>(null);
-  const point = points.find(item => item.key === picked);
+  const point = points.find(item => item.key === picked && !item.hidden);
   if (!points.some(item => item.value !== null)) return <p className="usage-empty">所选范围暂无可绘制的用量数据。</p>;
   const show = (item: UsagePoint) => (item.label ?? item.key.replace('T', ' ')) + ' · ' + (item.value === null ? '无记录' : format(item.value));
   const peak = points.reduce((max, item) => Math.max(max, item.value ?? 0), 0);
@@ -46,7 +46,7 @@ export function UsageCharts({points, format, metric, hourly, mode, axisFormat, s
 }
 
 function Plot({points, mode, title, pick, axisFormat, step, picked}: {
-  points: UsagePoint[]; mode: 'line' | 'bar'; title: string; pick: (key: string) => void; axisFormat?: (value: number) => string;
+  points: UsagePoint[]; mode: 'line' | 'bar'; title: string; pick: (key: string | null) => void; axisFormat?: (value: number) => string;
   step: boolean; picked: string | null;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -84,7 +84,7 @@ function Plot({points, mode, title, pick, axisFormat, step, picked}: {
         if (step && prior) {
           ctx.beginPath(); ctx.moveTo(prior.x, prior.y); ctx.lineTo(x, prior.y); ctx.stroke();
         }
-        if (item.value === null) { prior = null; return; }
+        if (item.value === null || item.hidden) { prior = null; return; }
         const y = bottom - item.value / ceiling * (bottom - top);
         if (mode === 'bar') {
           const size = Math.min(25, spacing * .68);
@@ -119,7 +119,7 @@ function Plot({points, mode, title, pick, axisFormat, step, picked}: {
     return () => observer.disconnect();
   }, [mode, points, axisFormat, step, step ? picked : null]);
 
-  const selectable = step ? points.filter(point => !point.endpoint && point.value !== null) : points;
+  const selectable = step ? points.filter(point => !point.hidden && !point.endpoint && point.value !== null) : points;
   return <figure className="usage-plot">
     <figcaption>{title}</figcaption>
     <canvas ref={canvas} role="img" aria-label={title} tabIndex={step ? 0 : undefined} onKeyDown={event => {
@@ -140,7 +140,7 @@ function Plot({points, mode, title, pick, axisFormat, step, picked}: {
         const distance = Math.abs(xPosition(points, index) - position);
         if (distance < closest) { selected = item; closest = distance; }
       });
-      if (selected) pick(selected.key);
+      if (selected) pick(selected.hidden ? null : selected.key);
     }}/>
   </figure>;
 }

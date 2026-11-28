@@ -38,7 +38,21 @@ impl PriceStore {
 
     fn read(&self) -> Result<Disk, String> {
         match fs::read(&self.path) {
-            Ok(data) => serde_json::from_slice(&data).map_err(|_| "无法读取本地价格历史。".into()),
+            Ok(data) => {
+                let mut disk: Disk =
+                    serde_json::from_slice(&data).map_err(|_| "无法读取本地价格历史。")?;
+                let history = disk.view.history.iter_mut().map(|point| &mut point.sources);
+                let current = disk.view.current.iter_mut().map(|point| &mut point.sources);
+                for sources in history.chain(current).flatten() {
+                    if let Some(quote) = &mut sources.overall {
+                        if quote.self_hosted.is_none() {
+                            let url = quote.source.url.as_deref().and_then(web_url);
+                            quote.self_hosted = classify_source(&quote.source.id, url.as_ref());
+                        }
+                    }
+                }
+                Ok(disk)
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Disk::default()),
             Err(_) => Err("无法打开本地价格历史。".into()),
         }
@@ -231,13 +245,15 @@ struct Offer {
 #[derive(Clone, Serialize, Deserialize)]
 struct PriceSources {
     overall: Option<PriceQuote>,
-    marketplace: Option<PriceQuote>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PriceQuote {
     price: f64,
     source: MerchantSource,
+    #[serde(default)]
+    self_hosted: Option<bool>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -393,6 +409,7 @@ fn current_snapshot(product: Product, stale: bool) -> Result<Current, String> {
             offer.source.clone().map(|source| PriceQuote {
                 price: offer.price,
                 source,
+                self_hosted: offer.self_hosted,
             })
         });
     let mut offers: Vec<_> = product
@@ -409,15 +426,6 @@ fn current_snapshot(product: Product, stale: bool) -> Result<Current, String> {
         }
     }
     offers.sort_by(|a, b| a.price.total_cmp(&b.price));
-    let marketplace = offers
-        .iter()
-        .filter(|offer| offer.available && offer.self_hosted == Some(false))
-        .find_map(|offer| {
-            offer.source.clone().map(|source| PriceQuote {
-                price: offer.price,
-                source,
-            })
-        });
     Ok(Current {
         time,
         lowest,
@@ -425,10 +433,7 @@ fn current_snapshot(product: Product, stale: bool) -> Result<Current, String> {
         in_stock_count: product.in_stock_count,
         offers,
         stale,
-        sources: Some(PriceSources {
-            overall,
-            marketplace,
-        }),
+        sources: Some(PriceSources { overall }),
     })
 }
 
@@ -499,7 +504,7 @@ mod tests {
     }
 
     #[test]
-    fn captures_storefront_attribution_for_both_price_modes() {
+    fn tracks_the_original_lowest_quote_and_its_storefront() {
         let product = serde_json::from_value(serde_json::json!({
             "id": PRODUCT, "snapshot_generated_at": "2026-11-28T12:00:00+08:00", "lowest_price": 6.8,
             "lowest_offer": {"id": "direct", "source_id": "direct-store", "source_name": "独立商家",
@@ -523,12 +528,13 @@ mod tests {
         let mut disk = Disk::default();
         disk.accept(current, 0);
         let sources = disk.view.history[0].sources.as_ref().unwrap();
-        assert_eq!(sources.overall.as_ref().unwrap().source.name, "独立商家");
-        let market = sources.marketplace.as_ref().unwrap();
-        assert_eq!(market.price, 9.0);
+        let overall = sources.overall.as_ref().unwrap();
+        assert_eq!(overall.source.name, "独立商家");
+        assert_eq!(overall.price, 6.8);
+        assert_eq!(overall.self_hosted, Some(true));
         assert_eq!(
-            market.source.url.as_deref(),
-            Some("https://www.wzyp.cn/item/9")
+            overall.source.url.as_deref(),
+            Some("https://shop.example.com/item/1")
         );
         let legacy: PricePoint = serde_json::from_str(r#"{"time":1,"lowest":17}"#).unwrap();
         assert!(legacy.sources.is_none());
